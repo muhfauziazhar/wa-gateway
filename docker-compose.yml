@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  wa-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wa-gateway
+    restart: unless-stopped
+    
+    # Resource limits - adjusted for upgraded server
+    deploy:
+      resources:
+        limits:
+          memory: 512M    # Kembali ke original karena server sudah upsize
+          cpus: '0.5'     
+        reservations:
+          memory: 256M    
+          cpus: '0.25'
+    
+    environment:
+      - NODE_ENV=production
+      - PORT=5001
+      - KEY=${WA_GATEWAY_KEY}
+      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL}
+    
+    ports:
+      - "127.0.0.1:5001:5001"  # Bind ke localhost only (nginx akan proxy)
+    
+    volumes:
+      # Persistent storage untuk WhatsApp credentials
+      - wa_credentials:/app/wa_credentials
+      - wa_media:/app/media
+      # Bind mount untuk easier debugging (optional)
+      - ./logs:/app/logs
+    
+    networks:
+      - wa-gateway-network
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5001/health"]
+      interval: 30s      # Kembali ke normal frequency
+      timeout: 10s
+      retries: 3         
+      start_period: 40s
+    
+    # Log configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"   # Kembali ke original
+        max-file: "3"
+
+volumes:
+  wa_credentials:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/wa-gateway/credentials
+  
+  wa_media:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/wa-gateway/media
+
+networks:
+  wa-gateway-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.23.0.0/16  # Avoid conflict dengan n8n di 172.22.0.0/16

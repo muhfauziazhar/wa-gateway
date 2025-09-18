@@ -13,6 +13,7 @@ import { CreateWebhookProps } from "./webhooks";
 import { createWebhookMessage } from "./webhooks/message";
 import { createWebhookSession } from "./webhooks/session";
 import { createProfileController } from "./controllers/profile";
+import { createHealthController } from "./controllers/health";
 import { serveStatic } from "@hono/node-server/serve-static";
 
 const app = new Hono();
@@ -49,6 +50,11 @@ app.route("/message", createMessageController());
  * profile routes
  */
 app.route("/profile", createProfileController());
+
+/**
+ * health check route
+ */
+app.route("/health", createHealthController());
 
 const port = env.PORT;
 

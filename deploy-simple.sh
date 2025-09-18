@@ -43,9 +43,11 @@ setup_environment() {
     if [ ! -f .env ]; then
         cp .env.docker .env
         
-        # Generate secure API key
-        API_KEY=$(openssl rand -base64 32)
-        sed -i "s/your-super-secure-api-key-here/$API_KEY/" .env
+        # Generate secure API key (alphanumeric only to avoid sed issues)
+        API_KEY=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
+        
+        # Use pipe delimiter to avoid conflicts with special characters
+        sed -i "s|your-super-secure-api-key-here|$API_KEY|g" .env
         
         print_success "Environment configured"
         print_warning "Your API Key: $API_KEY"
@@ -58,6 +60,11 @@ setup_environment() {
         fi
     else
         print_warning ".env file already exists, skipping configuration"
+        # Display existing API key
+        EXISTING_KEY=$(grep "WA_GATEWAY_KEY=" .env | cut -d'=' -f2)
+        if [ ! -z "$EXISTING_KEY" ]; then
+            print_warning "Using existing API Key: $EXISTING_KEY"
+        fi
     fi
 }
 
@@ -83,7 +90,7 @@ setup_rate_limiting() {
 setup_nginx() {
     print_status "Setting up nginx configuration for wa.fauzi.tech..."
     
-    # Create nginx site config
+    # Create nginx site config (HTTP-only first, SSL will be added later)
     sudo tee /etc/nginx/sites-available/wa-gateway > /dev/null << 'EOF'
 server {
     listen 80;
@@ -92,24 +99,6 @@ server {
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
-    
-    location / {
-        return 301 https://$host$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl;
-    server_name wa.fauzi.tech;
-
-    ssl_certificate /etc/letsencrypt/live/wa.fauzi.tech/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/wa.fauzi.tech/privkey.pem;
-    
-    # Security headers
-    add_header X-Content-Type-Options nosniff;
-    add_header X-Frame-Options DENY;
-    add_header X-XSS-Protection "1; mode=block";
-    add_header Referrer-Policy "strict-origin-when-cross-origin";
     
     location / {
         limit_req zone=wa_gateway burst=20 nodelay;
@@ -159,7 +148,7 @@ EOF
     # Test nginx config
     if sudo nginx -t; then
         sudo systemctl reload nginx
-        print_success "Nginx configuration updated"
+        print_success "Nginx configuration updated (HTTP-only)"
     else
         print_error "Nginx configuration test failed"
         exit 1
@@ -198,13 +187,32 @@ deploy_app() {
 setup_ssl() {
     print_status "Setting up SSL certificate for wa.fauzi.tech..."
     
-    # Get SSL certificate using certbot
-    if command -v certbot >/dev/null 2>&1; then
-        sudo certbot --nginx -d wa.fauzi.tech --non-interactive --agree-tos --email admin@fauzi.tech
-        print_success "SSL certificate configured for wa.fauzi.tech"
+    # Check if DNS is ready first
+    print_status "Checking DNS resolution for wa.fauzi.tech..."
+    if nslookup wa.fauzi.tech > /dev/null 2>&1; then
+        print_success "DNS resolution OK"
+        
+        # Install certbot if not exists
+        if ! command -v certbot >/dev/null 2>&1; then
+            print_status "Installing certbot..."
+            sudo apt update && sudo apt install -y certbot python3-certbot-nginx
+        fi
+        
+        # Get SSL certificate using certbot
+        print_status "Requesting SSL certificate..."
+        if sudo certbot --nginx -d wa.fauzi.tech --non-interactive --agree-tos --email admin@fauzi.tech; then
+            print_success "SSL certificate configured for wa.fauzi.tech"
+            print_success "Site now available at: https://wa.fauzi.tech"
+        else
+            print_warning "SSL setup failed. You can run it manually later:"
+            print_warning "sudo certbot --nginx -d wa.fauzi.tech"
+            print_warning "Site currently available at: http://wa.fauzi.tech"
+        fi
     else
-        print_warning "Certbot not found. Please install certbot and run:"
-        print_warning "sudo certbot --nginx -d wa.fauzi.tech"
+        print_warning "DNS for wa.fauzi.tech not resolved yet."
+        print_warning "Please ensure DNS record is set: wa.fauzi.tech -> 152.42.198.49"
+        print_warning "Then run SSL setup manually: sudo certbot --nginx -d wa.fauzi.tech"
+        print_warning "Site currently available at: http://wa.fauzi.tech"
     fi
 }
 
@@ -272,19 +280,35 @@ main() {
     echo "🎉 Deployment completed successfully!"
     echo ""
     echo "📋 Access Information:"
-    echo "   Application URL: https://wa.fauzi.tech"
+    if [ -f /etc/letsencrypt/live/wa.fauzi.tech/fullchain.pem ]; then
+        echo "   Application URL: https://wa.fauzi.tech"
+        echo "   Health Check: https://wa.fauzi.tech/health"
+    else
+        echo "   Application URL: http://wa.fauzi.tech"
+        echo "   Health Check: http://wa.fauzi.tech/health"
+        echo "   ⚠️  SSL not configured yet - run: sudo certbot --nginx -d wa.fauzi.tech"
+    fi
     echo "   API Key: $(grep WA_GATEWAY_KEY .env | cut -d'=' -f2)"
-    echo "   Health Check: https://wa.fauzi.tech/health"
     echo ""
     echo "🔧 Useful Commands:"
     echo "   View logs: docker-compose logs -f"
     echo "   Restart: docker-compose restart"
     echo "   Stop: docker-compose down"
     echo "   Manual backup: /opt/wa-gateway/backup.sh"
+    echo "   Setup SSL: sudo certbot --nginx -d wa.fauzi.tech"
     echo ""
     echo "📱 Next Steps:"
-    echo "   1. Add DNS record: wa.fauzi.tech -> 152.42.198.49"
-    echo "   2. Test API endpoints"
+    if ! nslookup wa.fauzi.tech > /dev/null 2>&1; then
+        echo "   1. ⚠️  Add DNS record in Cloudflare:"
+        echo "      Type: A, Name: wa, Content: 152.42.198.49"
+        echo "      Proxy status: DNS only (grey cloud ☁️)"
+        echo "   2. Wait 5-10 minutes for DNS propagation"
+        echo "   3. Run SSL setup: sudo certbot --nginx -d wa.fauzi.tech"
+        echo "   4. Test API endpoints"
+    else
+        echo "   1. ✅ DNS is configured"
+        echo "   2. Test API endpoints"
+    fi
     echo "   3. Create WhatsApp session"
     echo "   4. Configure webhooks if needed"
     echo ""

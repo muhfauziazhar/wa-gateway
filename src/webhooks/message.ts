@@ -22,8 +22,10 @@ type WebhookMessageBody = {
 
 export const createWebhookMessage =
   (props: CreateWebhookProps) => async (message: MessageReceived) => {
-    if (message.key.fromMe || message.key.remoteJid?.includes("broadcast"))
-      return;
+    if (message.key.fromMe || message.key.remoteJid?.includes("broadcast")) return;
+
+    // Hanya sessionId yang mengandung '-bot' yang boleh kirim
+    if (!message.sessionId.includes('-bot')) return;
 
     const endpoint = `${props.baseUrl}/message`;
 
